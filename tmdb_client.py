@@ -2,13 +2,12 @@ import requests
 import gzip
 import shutil
 import json
-import csv
-import os
 import configparser 
 import threading
 import queue
+import numpy as np
+import pandas as pd
 from time import sleep
-from concurrent.futures import ThreadPoolExecutor
 
 config = configparser.ConfigParser()
 config.read("config.ini")
@@ -53,41 +52,54 @@ def get_movie(q, results):
         else:
             print("Done fetching movie: " + str(movie_id))
             sleep(10.0)
-            results[index] = res.json()
+            data = res.json()
+            if data.get("status_code"):
+                results[index] = {}
+            else:
+                results[index] = data
         
     return True
     
 def write_movies_to_csv(movies):
-    with open("movies.csv", "w", newline="") as csvfile:
-        filewriter = csv.writer(csvfile, delimiter=',',
-                                quotechar='|', quoting=csv.QUOTE_MINIMAL)
-        filewriter.writerow(["id", "imdb_id", "title", "overview", "release_date", 
-                             "runtime", "genres", "popularity", "poster_path", 
-                             "budget", "revenue"])
-        
-        for movie in movies:
-            csv_params = [
-                movie["id"],
-                movie["imdb_id"],
-                movie["title"],
-                movie["overview"],
-                movie["release_date"],
-                movie["runtime"],
-                [genre["name"] for genre in movie["genres"]],
-                movie["popularity"],
-                movie["poster_path"],
-                movie["budget"],
-                movie["revenue"]
-            ]
-            filewriter.writerow(csv_params)   
-
-def get_movies_from_csv():
-    csv_data = []
-    with open("movies.csv", "r") as f:
-        reader = csv.reader(f)
-        for row in reader:
-            csv_data.append(row)
-    return csv_data
+    headers = "id,imdb_id,title,overview,release_date,runtime,genres,"
+    headers += "popularity,poster_path,budget,revenue"
+    formatted_movies = None
+    
+    for movie in movies:
+        if movie:
+            genres = np.array([])
+            title = movie.get("title")
+            overview = movie.get("overview")
+            
+            if movie.get("genres"):
+                genres = np.array([genre["name"] for genre in movie["genres"]])
+            
+            if title:
+                title = title.replace(",", "").encode('utf-8')
+                
+            if overview:
+                overview = overview.replace(",", "").encode('utf-8')
+                
+            csv_params = np.array([[
+                movie.get("id"),
+                movie.get("imdb_id"),
+                title,
+                overview,
+                movie.get("release_date"),
+                movie.get("runtime"),
+                genres,
+                movie.get("popularity"),
+                movie.get("poster_path"),
+                movie.get("budget"),
+                movie.get("revenue"),
+            ]], dtype=object)
+    
+            if formatted_movies is None:
+                formatted_movies = csv_params
+            else:
+                formatted_movies = np.concatenate((formatted_movies, csv_params), axis=0)
+ 
+    np.savetxt("movies.csv", formatted_movies, delimiter=",", fmt='%s', header=headers)
 
 # TODO: use configuration API to dynamically build url
 def download_poster(q):
@@ -112,15 +124,13 @@ def download_poster(q):
 
 movie_ids = get_movie_ids()
 
-temp_movie_ids = movie_ids[:10000]
-
-movies = [{} for mv_id in temp_movie_ids]
+movies = [{} for mv_id in movie_ids]
 
 q = queue.Queue()
 
-for i in range(len(temp_movie_ids)):
+for i in range(len(movie_ids)):
     #need the index and the url in each queue item.
-    q.put((i, temp_movie_ids[i]))
+    q.put((i, movie_ids[i]))
 
 threads = []
 for i in range(40):
@@ -134,8 +144,10 @@ q.join()
 for t in threads:
     t.join()
 
-#write_movies_to_csv(movies)
-#    
+write_movies_to_csv(movies)
+
+#data = pd.read_csv("movies.csv", sep=",", encoding = 'utf8')
+
 #if not os.path.exists(POSTER_DIR_PATH):
 #    os.makedirs(POSTER_DIR_PATH) 
 #
