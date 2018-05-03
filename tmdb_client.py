@@ -5,6 +5,8 @@ import json
 import csv
 import os
 import configparser 
+import threading
+import queue
 from time import sleep
 from concurrent.futures import ThreadPoolExecutor
 
@@ -36,10 +38,25 @@ def get_movie_ids():
                 print("Error decoding: " + line)
     return movie_ids
 
-def get_movie(movie_id):
-    url = "https://api.themoviedb.org/3/movie/{}?api_key={}".format(movie_id, API_KEY)
-    return requests.get(url).json()
+def get_movie(q, results):
+    while not q.empty():
+        task = q.get()
+        index = task[0]
+        movie_id = task[1]
+        url = "https://api.themoviedb.org/3/movie/{}?api_key={}".format(movie_id, API_KEY)
+        res = requests.get(url)
+        q.task_done()
 
+        if res.status_code != 200 and res.status_code != 404:
+            print("Requeuing task: " + str(movie_id))
+            q.put((index, movie_id))
+        else:
+            print("Done fetching movie: " + str(movie_id))
+            sleep(10.0)
+            results[index] = res.json()
+        
+    return True
+    
 def write_movies_to_csv(movies):
     with open("movies.csv", "w", newline="") as csvfile:
         filewriter = csv.writer(csvfile, delimiter=',',
@@ -73,34 +90,69 @@ def get_movies_from_csv():
     return csv_data
 
 # TODO: use configuration API to dynamically build url
-def download_poster(movie):
-    poster_path = movie["poster_path"]
-    url = "https://image.tmdb.org/t/p/w500/{}".format(poster_path)
-    
-    res = requests.get(url)
-    
-    if res.status_code == 200:
-        with open("{}/{}.jpg".format(POSTER_DIR_PATH, movie["id"]), "wb") as f:
-            f.write(res.content)
-    else:
-        print("Error downloading poster: " + url)
-    
+def download_poster(q):
+    while not q.empty():
+        movie = q.get()
+        poster_path = movie["poster_path"]
+        url = "https://image.tmdb.org/t/p/w342/{}".format(poster_path)
+        res = requests.get(url)
+        q.task_done()
+        
+        if res.status_code != 200 and res.status_code != 404:
+            print("Status code: " + res.status_code)
+            print("Requeuing task: " + str(movie["id"]) + " url:" + url)
+            q.put(movie)
+        else:
+            print("Done fetching poster: " + str(movie["id"]))
+            sleep(10.0)
+            with open("{}/{}.jpg".format(POSTER_DIR_PATH, movie["id"]), "wb") as f:
+                f.write(res.content)
+                    
+    return True
 
-movie_ids = get_movie_ids()[:10]
+movie_ids = get_movie_ids()
 
-with ThreadPoolExecutor(max_workers=20) as pool:
-    movies = list(pool.map(get_movie, movie_ids))
-    # Rate limiting is set to 40 requests every 10 seconds
-    sleep(10)
+temp_movie_ids = movie_ids[:10000]
+
+movies = [{} for mv_id in temp_movie_ids]
+
+q = queue.Queue()
+
+for i in range(len(temp_movie_ids)):
+    #need the index and the url in each queue item.
+    q.put((i, temp_movie_ids[i]))
+
+threads = []
+for i in range(40):
+    worker = threading.Thread(target=get_movie, args=(q, movies))
+    threads.append(worker)
+    worker.setDaemon(True)
+    worker.start()
     
-write_movies_to_csv(movies)
-csv_movies = get_movies_from_csv()
-    
-if not os.path.exists(POSTER_DIR_PATH):
-    os.makedirs(POSTER_DIR_PATH)
+q.join()
 
-with ThreadPoolExecutor(max_workers=20) as pool:
-    list(pool.map(download_poster, movies))
-    # Rate limiting is set to 40 requests every 10 seconds
-    sleep(10)
+for t in threads:
+    t.join()
 
+#write_movies_to_csv(movies)
+#    
+#if not os.path.exists(POSTER_DIR_PATH):
+#    os.makedirs(POSTER_DIR_PATH) 
+#
+#q = queue.Queue()
+#
+#for i in range(len(movies)):
+#    #need the index and the url in each queue item.
+#    q.put(movies[i])
+#    
+#threads = []
+#for i in range(20):
+#    worker = threading.Thread(target=download_poster, args=(q))
+#    threads.append(worker)
+#    worker.setDaemon(True)
+#    worker.start()
+#
+#q.join()
+#
+#for t in threads:
+#    t.join()
