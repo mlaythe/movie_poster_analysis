@@ -106,65 +106,69 @@ def download_poster(q):
     while not q.empty():
         movie = q.get()
         poster_path = movie["poster_path"]
-        url = "https://image.tmdb.org/t/p/w342/{}".format(poster_path)
-        res = requests.get(url)
         q.task_done()
         
-        if res.status_code != 200 and res.status_code != 404:
-            print("Status code: " + res.status_code)
-            print("Requeuing task: " + str(movie["id"]) + " url:" + url)
-            q.put(movie)
-        else:
-            print("Done fetching poster: " + str(movie["id"]))
-            sleep(10.0)
-            with open("{}/{}.jpg".format(POSTER_DIR_PATH, movie["id"]), "wb") as f:
-                f.write(res.content)
+        if not poster_path is None and poster_path != "None":
+            url = "https://image.tmdb.org/t/p/w342/{}".format(poster_path)
+            res = requests.get(url)
+            
+            if res.status_code == 404:
+                print("Missing poster: " + str(movie["# id"]))
+            elif res.status_code != 200:
+                print("Status code: " + str(res.status_code))
+                print("Requeuing task: " + str(movie["# id"]) + " url:" + url)
+                q.put(movie)
+            else:
+                print("Done fetching poster: " + str(movie["# id"]))
+                sleep(10.0)
+                with open("{}/{}.jpg".format(POSTER_DIR_PATH, movie["# id"]), "wb") as f:
+                    f.write(res.content)
                     
     return True
 
-movie_ids = get_movie_ids()
-
-movies = [{} for mv_id in movie_ids]
-
-q = queue.Queue()
-
-for i in range(len(movie_ids)):
-    #need the index and the url in each queue item.
-    q.put((i, movie_ids[i]))
-
-threads = []
-for i in range(40):
-    worker = threading.Thread(target=get_movie, args=(q, movies))
-    threads.append(worker)
-    worker.setDaemon(True)
-    worker.start()
-    
-q.join()
-
-for t in threads:
-    t.join()
-
-write_movies_to_csv(movies)
-
-#data = pd.read_csv("movies.csv", sep=",", encoding = 'utf8')
-
-#if not os.path.exists(POSTER_DIR_PATH):
-#    os.makedirs(POSTER_DIR_PATH) 
+#movie_ids = get_movie_ids()
 #
+#movies = [{} for mv_id in movie_ids]
+
 #q = queue.Queue()
 #
-#for i in range(len(movies)):
+#for i in range(len(movie_ids)):
 #    #need the index and the url in each queue item.
-#    q.put(movies[i])
-#    
+#    q.put((i, movie_ids[i]))
+#
 #threads = []
-#for i in range(20):
-#    worker = threading.Thread(target=download_poster, args=(q))
+#for i in range(40):
+#    worker = threading.Thread(target=get_movie, args=(q, movies))
 #    threads.append(worker)
 #    worker.setDaemon(True)
 #    worker.start()
-#
+#    
 #q.join()
 #
 #for t in threads:
 #    t.join()
+#
+#write_movies_to_csv(movies)
+
+data = pd.read_csv("movies.csv", sep=",", encoding = 'utf8')
+
+#if not os.path.exists(POSTER_DIR_PATH):
+#    os.makedirs(POSTER_DIR_PATH)  
+
+q = queue.Queue()
+
+for i in range(len(data)):
+    #need the index and the url in each queue item.
+    q.put(data.iloc[i])
+    
+threads = []
+for i in range(40):
+    worker = threading.Thread(target=download_poster, args=(q,))
+    threads.append(worker)
+    worker.setDaemon(True)
+    worker.start()
+
+q.join()
+
+for t in threads:
+    t.join()
